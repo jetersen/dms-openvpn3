@@ -2,6 +2,8 @@
 
 An independent DankMaterialShell 1.5 widget for importing and removing OpenVPN® 3 Linux profiles, seeing which sessions are actually connected, and connecting or disconnecting them.
 
+![Profile manager popout](docs/screenshot.png)
+
 ## Requirements
 
 - DankMaterialShell 1.5 or newer
