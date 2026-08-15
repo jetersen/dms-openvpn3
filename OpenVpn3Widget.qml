@@ -310,8 +310,8 @@ PluginComponent {
 
                                 Rectangle {
                                     visible: !profileCard.hasLiveSession
-                                    width: connectLabel.implicitWidth + Theme.spacingM * 2
-                                    height: 30
+                                    implicitWidth: connectLabel.implicitWidth + Theme.spacingM * 2
+                                    implicitHeight: 30
                                     radius: 15
                                     color: connectArea.containsMouse ? Theme.primaryHoverLight : Theme.surfaceLight
                                     opacity: OpenVpn3Service.actionInFlight ? 0.5 : 1
@@ -425,8 +425,8 @@ PluginComponent {
                                     }
 
                                     Rectangle {
-                                        width: disconnectLabel.implicitWidth + Theme.spacingM * 2
-                                        height: 28
+                                        implicitWidth: disconnectLabel.implicitWidth + Theme.spacingM * 2
+                                        implicitHeight: 28
                                         radius: 14
                                         color: disconnectArea.containsMouse ? Theme.errorHover : Theme.surfaceLight
                                         opacity: OpenVpn3Service.actionInFlight ? 0.5 : 1
