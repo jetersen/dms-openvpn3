@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+
+if command -v qmllint >/dev/null 2>&1; then
+  qmllint_bin=$(command -v qmllint)
+elif [[ -x /usr/lib/qt6/bin/qmllint ]]; then
+  qmllint_bin=/usr/lib/qt6/bin/qmllint
+else
+  echo "qmllint was not found; install the Qt declarative development tools." >&2
+  exit 127
+fi
+
+cd "$repo_dir"
+
+# DMS exposes qs.* modules from its source tree without qmldir/qmltypes metadata.
+# Suppress only the resulting type-resolution cascade; syntax and the remaining
+# semantic checks still fail normally.
+exec "$qmllint_bin" \
+  -I /usr/lib/qt6/qml \
+  -I /usr/share/quickshell/dms \
+  --import disable \
+  --required disable \
+  --signal-handler-parameters disable \
+  --unqualified disable \
+  --unresolved-type disable \
+  OpenVpn3Service.qml \
+  OpenVpn3Widget.qml \
+  StartupCheck.qml

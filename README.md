@@ -39,10 +39,15 @@ OpenVPN® 3 Linux is a separate project and dependency.
 ## Testing
 
 ```bash
+scripts/lint-qml
 python3 -m unittest discover -s tests -v
 python3 helper/openvpn3_bridge.py health
 python3 helper/openvpn3_bridge.py snapshot
 ```
+
+The lint script discovers `qmllint` from `PATH` or Qt 6's standard Arch Linux
+location. DMS does not currently ship QML type metadata for its `qs.*` modules,
+so warnings caused solely by those unresolved framework types are disabled.
 
 `snapshot` is read-only. Connect, disconnect, import, and removal tests against the live services are manual because they change VPN state.
 
