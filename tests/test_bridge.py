@@ -2,6 +2,7 @@ import importlib.util
 import pathlib
 import tempfile
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = pathlib.Path(__file__).parents[1] / "helper" / "openvpn3_bridge.py"
@@ -19,6 +20,11 @@ class FakeProperties:
         if isinstance(value, Exception):
             raise value
         return value
+
+
+class UnknownObjectError(RuntimeError):
+    def get_dbus_name(self):
+        return "org.freedesktop.DBus.Error.UnknownObject"
 
 
 class FakeApi:
@@ -118,6 +124,50 @@ class MutationApi:
         return self.interface
 
 
+class StaleSessionApi(MutationApi):
+    stale_session_path = "/net/openvpn/v3/sessions/stale"
+
+    def __init__(self):
+        super().__init__()
+        self._session_paths.append(self.stale_session_path)
+
+    def properties(self, service, path):
+        if path == self.stale_session_path:
+            raise UnknownObjectError("Object does not exist")
+        return super().properties(service, path)
+
+
+class DelayedSessionApi(MutationApi):
+    def __init__(self):
+        super().__init__()
+        self.ready_attempts = 0
+        self.record_attempts = 0
+        self.connected = False
+
+    def session_interface(self, path):
+        api = self
+
+        class DelayedInterface(FakeSessionInterface):
+            def Ready(self):
+                api.ready_attempts += 1
+                if api.ready_attempts < 3:
+                    raise UnknownObjectError("Object does not exist")
+                super().Ready()
+
+            def Connect(self):
+                api.connected = True
+                super().Connect()
+
+        return DelayedInterface()
+
+    def properties(self, service, path):
+        if self.connected:
+            self.record_attempts += 1
+            if self.record_attempts < 2:
+                raise UnknownObjectError("Object does not exist")
+        return super().properties(service, path)
+
+
 class FakeConfigManager:
     def __init__(self, api):
         self.api = api
@@ -169,6 +219,19 @@ class ProfileApi:
         return self.interface
 
 
+class StaleProfileSessionApi(ProfileApi):
+    stale_session_path = "/net/openvpn/v3/sessions/stale"
+
+    def __init__(self):
+        super().__init__(with_profile=True)
+        self._session_paths.append(self.stale_session_path)
+
+    def properties(self, service, path):
+        if path == self.stale_session_path:
+            raise UnknownObjectError("Object does not exist")
+        return super().properties(service, path)
+
+
 class BridgeTests(unittest.TestCase):
     def test_only_connected_status_is_active(self):
         self.assertEqual("connected", bridge.state_from_status(2, 7))
@@ -217,6 +280,21 @@ class BridgeTests(unittest.TestCase):
         self.assertTrue(api.interface.connect_called)
         self.assertEqual("connecting", result["session"]["state"])
 
+    def test_connect_ignores_session_removed_during_enumeration(self):
+        api = StaleSessionApi()
+        result = bridge.connect(api, api.config_path)
+        self.assertFalse(result["existing"])
+        self.assertTrue(api.interface.connect_called)
+
+    @mock.patch.object(bridge.time, "sleep")
+    def test_connect_retries_a_new_session_until_it_is_readable(self, sleep):
+        api = DelayedSessionApi()
+        result = bridge.connect(api, api.config_path)
+        self.assertFalse(result["existing"])
+        self.assertEqual(3, api.ready_attempts)
+        self.assertEqual(2, api.record_attempts)
+        self.assertEqual(3, sleep.call_count)
+
     def test_existing_live_session_prevents_duplicate_tunnel(self):
         api = MutationApi(status=(2, 7, "Connected"))
         api._session_paths.append(api.new_session_path)
@@ -261,6 +339,12 @@ class BridgeTests(unittest.TestCase):
 
     def test_remove_profile_calls_config_remove(self):
         api = ProfileApi(with_profile=True)
+        result = bridge.remove_profile(api, api.config_path)
+        self.assertTrue(result["removed"])
+        self.assertTrue(api.interface.remove_called)
+
+    def test_remove_profile_ignores_session_removed_during_enumeration(self):
+        api = StaleProfileSessionApi()
         result = bridge.remove_profile(api, api.config_path)
         self.assertTrue(result["removed"])
         self.assertTrue(api.interface.remove_called)

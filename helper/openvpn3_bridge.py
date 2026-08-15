@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import re
 import sys
+import time
 from typing import Any
 
 PROTOCOL_VERSION = 1
@@ -24,6 +25,8 @@ CONFIG_PATH_RE = re.compile(r"^/net/openvpn/v3/configuration/[A-Za-z0-9_]+$")
 SESSION_PATH_RE = re.compile(r"^/net/openvpn/v3/sessions/[A-Za-z0-9_]+$")
 PROFILE_EXTENSIONS = {".ovpn", ".conf"}
 MAX_PROFILE_BYTES = 4 * 1024 * 1024
+SESSION_OBJECT_ATTEMPTS = 20
+SESSION_OBJECT_RETRY_SECONDS = 0.05
 
 MAJOR_NAMES = {
     0: "UNSET",
@@ -167,6 +170,44 @@ def session_record(api: OpenVpnBus, path: str) -> dict[str, Any]:
     }
 
 
+def visible_session_records(api: OpenVpnBus) -> list[dict[str, Any]]:
+    """Return sessions that still exist after the manager snapshot."""
+    records: list[dict[str, Any]] = []
+    for path in api.session_paths():
+        try:
+            records.append(session_record(api, path))
+        except Exception as exc:
+            if classify_exception(exc).code != "NOT_FOUND":
+                raise
+    return records
+
+
+def wait_for_session_record(api: OpenVpnBus, path: str) -> dict[str, Any]:
+    """Wait briefly for a newly created session object to become readable."""
+    for attempt in range(SESSION_OBJECT_ATTEMPTS):
+        try:
+            return session_record(api, path)
+        except Exception as exc:
+            if classify_exception(exc).code != "NOT_FOUND" or attempt == SESSION_OBJECT_ATTEMPTS - 1:
+                raise
+            time.sleep(SESSION_OBJECT_RETRY_SECONDS)
+    raise AssertionError("unreachable")
+
+
+def ready_session(api: OpenVpnBus, path: str) -> Any:
+    """Wait briefly if the session manager has not published a new object yet."""
+    for attempt in range(SESSION_OBJECT_ATTEMPTS):
+        interface = api.session_interface(path)
+        try:
+            interface.Ready()
+            return interface
+        except Exception as exc:
+            if classify_exception(exc).code != "NOT_FOUND" or attempt == SESSION_OBJECT_ATTEMPTS - 1:
+                raise
+            time.sleep(SESSION_OBJECT_RETRY_SECONDS)
+    raise AssertionError("unreachable")
+
+
 def snapshot(api: OpenVpnBus) -> dict[str, Any]:
     profiles: list[dict[str, Any]] = []
     sessions: list[dict[str, Any]] = []
@@ -199,21 +240,23 @@ def connect(api: OpenVpnBus, config_path: str) -> dict[str, Any]:
     if config_path not in api.config_paths():
         raise BridgeError("NOT_FOUND", "The configuration is unavailable")
 
-    for path in api.session_paths():
-        record = session_record(api, path)
+    for record in visible_session_records(api):
         if record["config_path"] == config_path and record["state"] not in {"failed", "disconnected"}:
             return {"session": record, "existing": True}
 
     new_path = ""
     try:
         new_path = str(api.session_manager.NewTunnel(api.dbus.ObjectPath(config_path)))
-        interface = api.session_interface(new_path)
         try:
-            interface.Ready()
-        except Exception:
-            record = session_record(api, new_path)
+            interface = ready_session(api, new_path)
+        except Exception as ready_error:
+            try:
+                record = wait_for_session_record(api, new_path)
+            except Exception:
+                raise ready_error
             if record["state"] == "auth_required":
                 return {"session": record, "existing": False, "authenticationRequired": True}
+            interface = api.session_interface(new_path)
             try:
                 pending = interface.UserInputQueueGetTypeGroup()
             except Exception:
@@ -223,7 +266,7 @@ def connect(api: OpenVpnBus, config_path: str) -> dict[str, Any]:
                 return {"session": record, "existing": False, "authenticationRequired": True}
             raise
         interface.Connect()
-        return {"session": session_record(api, new_path), "existing": False}
+        return {"session": wait_for_session_record(api, new_path), "existing": False}
     except BridgeError:
         raise
     except Exception as exc:
@@ -302,8 +345,7 @@ def remove_profile(api: OpenVpnBus, config_path: str) -> dict[str, Any]:
         raise BridgeError("INVALID_REQUEST", "Invalid configuration path")
     if config_path not in api.config_paths():
         return {"removed": True, "alreadyGone": True}
-    for path in api.session_paths():
-        record = session_record(api, path)
+    for record in visible_session_records(api):
         if record["config_path"] == config_path and record["state"] not in {"failed", "disconnected"}:
             raise BridgeError("PROFILE_IN_USE", "Disconnect this profile before removing it")
     try:

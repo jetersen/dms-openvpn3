@@ -142,7 +142,7 @@ Singleton {
         });
     }
 
-    function unsubscribeSession(path) {
+    function unsubscribeSession(path, disableLogForward = true) {
         const entry = sessionSubscriptions[path];
         if (!entry)
             return;
@@ -150,7 +150,7 @@ Singleton {
             DMSService.dbusUnsubscribe(entry.statusId, null);
         if (entry.attentionId)
             DMSService.dbusUnsubscribe(entry.attentionId, null);
-        if (DMSService.isConnected)
+        if (disableLogForward && DMSService.isConnected)
             DMSService.dbusCall("system", sessionService, path, sessionService, "LogForward", [false], () => {});
         delete sessionSubscriptions[path];
     }
@@ -163,7 +163,7 @@ Singleton {
             subscribeSession(path);
         for (const path of Object.keys(sessionSubscriptions)) {
             if (!currentPaths.has(path))
-                unsubscribeSession(path);
+                unsubscribeSession(path, false);
         }
     }
 
