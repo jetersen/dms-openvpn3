@@ -27,6 +27,9 @@ Singleton {
     property bool refreshPending: false
     property string managerSubscriptionId: ""
     property var sessionSubscriptions: ({})
+    property var dnsStatus: ({})
+    property bool dnsPending: false
+    property bool dnsRefreshPending: false
 
     readonly property var connectedSessions: sessions.filter(session => session.active === true)
     readonly property bool isConnected: connectedSessions.length > 0
@@ -61,12 +64,13 @@ Singleton {
             return;
         const index = sessions.findIndex(session => session.path === path);
         if (index < 0) {
-            refresh();
+            refresh(true);
             return;
         }
         const major = Number(body[0]);
         const minor = Number(body[1]);
         const state = stateFromStatus(major, minor);
+        const wasActive = sessions[index].active;
         const next = sessions.slice();
         next[index] = Object.assign({}, next[index], {
             "major": major,
@@ -76,15 +80,18 @@ Singleton {
             "message": state === "auth_required" ? "Authentication required" : String(body[2] || "")
         });
         sessions = next;
+        // Refresh device_name after connection/reconnection before DNS setup.
+        refresh(wasActive !== (state === "connected"));
     }
 
     function applyAttentionSignal(data) {
         const path = data?.path || "";
         const index = sessions.findIndex(session => session.path === path);
         if (index < 0) {
-            refresh();
+            refresh(true);
             return;
         }
+        const wasActive = sessions[index].active;
         const next = sessions.slice();
         next[index] = Object.assign({}, next[index], {
             "state": "auth_required",
@@ -92,6 +99,7 @@ Singleton {
             "message": "Authentication required"
         });
         sessions = next;
+        refresh(wasActive);
     }
 
     function initializeSubscriptions() {
@@ -180,7 +188,8 @@ Singleton {
         managerSubscriptionId = "";
     }
 
-    function refresh() {
+    function refresh(updateDns = false) {
+        dnsRefreshPending = dnsRefreshPending || updateDns;
         if (refreshInFlight) {
             refreshPending = true;
             return;
@@ -188,6 +197,15 @@ Singleton {
         refreshInFlight = true;
         snapshotTimeout.restart();
         snapshotProcess.running = true;
+    }
+
+    function syncDns() {
+        if (dnsProcess.running) {
+            dnsPending = true;
+            return;
+        }
+        dnsPending = false;
+        dnsProcess.running = true;
     }
 
     function connectProfile(configPath) {
@@ -259,7 +277,7 @@ Singleton {
 
     Component.onCompleted: {
         initializeSubscriptions();
-        refresh();
+        refresh(true);
     }
 
     Component.onDestruction: cleanupSubscriptions()
@@ -273,12 +291,12 @@ Singleton {
                 return;
             }
             root.initializeSubscriptions();
-            root.refresh();
+            root.refresh(true);
         }
 
         function onDbusSignalReceived(subscriptionId, data) {
             if (subscriptionId === root.managerSubscriptionId) {
-                root.refresh();
+                root.refresh(true);
                 return;
             }
             for (const path of Object.keys(root.sessionSubscriptions)) {
@@ -344,6 +362,10 @@ Singleton {
                     root.available = true;
                     root.lastError = "";
                     Qt.callLater(root.reconcileSessionSubscriptions);
+                    if (root.dnsRefreshPending) {
+                        root.dnsRefreshPending = false;
+                        Qt.callLater(root.syncDns);
+                    }
                 } else {
                     root.available = false;
                     root.lastError = root.responseError(response);
@@ -358,6 +380,28 @@ Singleton {
                 root.refreshPending = false;
                 Qt.callLater(root.refresh);
             }
+        }
+    }
+
+    Process {
+        id: dnsProcess
+        command: ["python3", root.helperPath, "dns-sync"]
+        running: false
+
+        stdout: StdioCollector {
+            onStreamFinished: {
+                const response = root.parseResponse(text);
+                if (response.ok) {
+                    root.dnsStatus = response.data.profiles || {};
+                } else {
+                    root.dnsStatus = {"_error": {"state": "error", "error": root.responseError(response)}};
+                }
+            }
+        }
+
+        onExited: {
+            if (root.dnsPending)
+                Qt.callLater(root.syncDns);
         }
     }
 

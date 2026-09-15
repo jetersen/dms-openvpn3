@@ -363,6 +363,7 @@ def parser() -> argparse.ArgumentParser:
     subparsers = result.add_subparsers(dest="operation", required=True)
     subparsers.add_parser("health")
     subparsers.add_parser("snapshot")
+    subparsers.add_parser("dns-sync")
     connect_parser = subparsers.add_parser("connect")
     connect_parser.add_argument("--config-path", required=True)
     disconnect_parser = subparsers.add_parser("disconnect")
@@ -388,6 +389,13 @@ def run(argv: list[str] | None = None, bus: Any = None) -> dict[str, Any]:
         return health(api)
     if args.operation == "snapshot":
         return snapshot(api)
+    if args.operation == "dns-sync":
+        import split_dns
+        profiles = split_dns.read_config(split_dns.config_path())
+        if not profiles and not split_dns.state_path().exists():
+            return {"profiles": {}}
+        statuses = split_dns.sync(profiles, visible_session_records(api), split_dns.Resolved(bus))
+        return {"profiles": statuses}
     if args.operation == "connect":
         return connect(api, args.config_path)
     if args.operation == "disconnect":

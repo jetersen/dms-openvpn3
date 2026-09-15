@@ -270,6 +270,7 @@ PluginComponent {
                         required property var modelData
                         readonly property var profileSessions: OpenVpn3Service.sessionsForProfile(modelData.path)
                         readonly property bool hasLiveSession: profileSessions.some(session => !["failed", "disconnected"].includes(session.state))
+                        readonly property var dns: OpenVpn3Service.dnsStatus[modelData.name] || OpenVpn3Service.dnsStatus["_error"] || null
 
                         width: parent.width
                         height: profileColumn.implicitHeight + Theme.spacingM * 2
@@ -305,6 +306,22 @@ PluginComponent {
                                         text: "Disconnected"
                                         color: Theme.surfaceVariantText
                                         font.pixelSize: Theme.fontSizeSmall
+                                    }
+
+                                    StyledText {
+                                        visible: profileCard.dns !== null
+                                        width: parent.width
+                                        text: {
+                                            const dns = profileCard.dns;
+                                            if (!dns) return "";
+                                            if (dns.state === "applied") return `DNS: ${dns.domains} domains via VPN`;
+                                            if (dns.state === "disabled") return "VPN domain routing disabled";
+                                            if (dns.state === "error") return `DNS: ${dns.error}`;
+                                            return "DNS: waiting for VPN";
+                                        }
+                                        color: profileCard.dns?.state === "error" ? Theme.error : Theme.surfaceVariantText
+                                        font.pixelSize: Theme.fontSizeSmall
+                                        wrapMode: Text.WordWrap
                                     }
                                 }
 

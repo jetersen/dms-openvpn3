@@ -36,6 +36,94 @@ Interactive authentication is intentionally deferred. If a session needs credent
 
 OpenVPN® 3 Linux is a separate project and dependency.
 
+## Optional application DNS routing
+
+The plugin can load DNS routing domains from a file or command for each profile.
+It uses the DNS server supplied by OpenVPN. A `.json` file contains an array of
+domain strings, such as `["example.com", "internal.example.org"]`. Other files
+and command output use one domain per line; `#` comments and a leading `~` are
+accepted. Each domain includes its subdomains. Catch-all routes and wildcards
+are rejected.
+
+Create `~/.config/dms-openvpn3/dns.json`:
+
+```json
+{
+  "profiles": {
+    "work": {
+      "enabled": true,
+      "file": "~/.config/dms-openvpn3/application-domains.json"
+    },
+    "another-profile": {
+      "enabled": true,
+      "command": ["/absolute/path/to/domain-provider", "--argument"]
+    }
+  }
+}
+```
+
+Use exactly one `file` or `command` per profile. Profile names must match
+OpenVPN's imported names. Commands are argument arrays, run without a shell,
+and must complete within ten seconds. They should only print the domain list.
+Keep this user-owned configuration in a trusted location. No command is run
+as root.
+
+With a file source, run your domain generator manually whenever its input
+changes. The plugin only reads the generated file; it does not execute the
+generator. It picks up a replaced file on the next connection or plugin load.
+
+Connection and disconnection events trigger DNS setup and cleanup. Initial
+plugin load also applies DNS to existing connections. The 60-second VPN status
+refresh does not read providers or change DNS. There is no separate watcher or
+system service. DNS state is shown on
+the profile card, including provider and authorization failures.
+
+This optional feature requires `systemd-resolved` and `resolvectl`. Your desktop
+may ask for authorization to change DNS domains and the default DNS route,
+according to its existing polkit policy. A DNS error does not disconnect the
+VPN. The plugin does not install additional privilege rules.
+
+To let OpenVPN set the default-route flag itself, configure the profile once
+and disconnect/reconnect:
+
+```bash
+openvpn3 config-manage --config work --dns-scope tunnel
+```
+
+This runs as the profile owner without sudo. The plugin then needs only the
+domain-list authorization, rather than separate prompts for domains and the
+default-route flag. Authorization may be requested again after the desktop's
+cache expires. To restore OpenVPN's original default scope later, use
+`openvpn3 config-manage --config work --unset-override dns-scope` and reconnect.
+
+To disable the feature, set `enabled` to `false` and run
+`python3 helper/openvpn3_bridge.py dns-sync` from the plugin directory. It
+restores the previous routing settings while the interface still exists.
+On disconnect, OpenVPN removes its interface and associated DNS settings;
+the plugin also restores settings if an inactive interface remains. If DMS
+is closed or crashes while the VPN stays connected, routes remain until the
+plugin runs again or OpenVPN removes the interface. Disconnect before removing
+the plugin if its DNS feature is active.
+
+Verify while connected:
+
+```bash
+resolvectl status
+resolvectl query --cache=no your.application.example
+resolvectl query --cache=no example.org
+```
+
+The application query should resolve through the OpenVPN interface; unrelated
+queries use your existing DNS routes. Browsers with a separate DNS-over-HTTPS
+resolver can bypass system DNS. Disconnect and reconnect to verify that the
+routes disappear and return automatically.
+
+For a manual reconciliation using the same helper as the UI:
+
+```bash
+python3 helper/openvpn3_bridge.py dns-sync
+```
+
 ## Testing
 
 ```bash
