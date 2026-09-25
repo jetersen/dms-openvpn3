@@ -83,6 +83,32 @@ may ask for authorization to change DNS domains and the default DNS route,
 according to its existing polkit policy. A DNS error does not disconnect the
 VPN. The plugin does not install additional privilege rules.
 
+To remove recurring authorization prompts, an administrator can install the
+optional [polkit rule](docs/10-dms-openvpn3-dns.rules) once. Neither the plugin
+nor its DNS providers need `pkexec` or root access. Copy the rule to a temporary
+file, replace `REPLACE_WITH_USERNAME` with your login name (`id -un`), and
+replace `REPLACE_WITH_VPN_INTERFACE` with the VPN interface shown by
+`resolvectl status` while connected. Then install your edited copy:
+
+```bash
+sudo install -o root -g root -m 0644 /path/to/edited/10-dms-openvpn3-dns.rules /etc/polkit-1/rules.d/10-dms-openvpn3-dns.rules
+python3 helper/openvpn3_bridge.py dns-sync
+```
+
+The rule allows an active local session of that user to change DNS domains and
+the DNS default-route flag on the named interface. This permission applies to
+all processes of that user, not only the plugin. It does not grant permission
+to change DNS server addresses. If OpenVPN assigns a different interface name
+on reconnect, the rule needs updating. On systemd versions that do not pass
+the interface name to polkit, this rule grants nothing and prompts remain.
+The interface detail is supplied by
+[systemd-resolved](https://github.com/systemd/systemd/blob/main/src/resolve/resolved-link-bus.c).
+
+Polkit reloads rules automatically. To restore the original authorization
+policy, remove `/etc/polkit-1/rules.d/10-dms-openvpn3-dns.rules`. Removing the
+rule does not undo DNS settings already applied; disable DNS routing as
+described below first if you also want to restore those settings.
+
 To let OpenVPN set the default-route flag itself, configure the profile once
 and disconnect/reconnect:
 

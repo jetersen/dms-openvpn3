@@ -1,0 +1,12 @@
+// Replace both placeholders before installing in /etc/polkit-1/rules.d/.
+// Grants these DNS operations to all processes of this active local user
+// on the named interface, not just the DMS plugin.
+polkit.addRule(function(action, subject) {
+    if (subject.user === "REPLACE_WITH_USERNAME" &&
+        subject.local && subject.active &&
+        action.lookup("interface") === "REPLACE_WITH_VPN_INTERFACE" &&
+        (action.id === "org.freedesktop.resolve1.set-domains" ||
+         action.id === "org.freedesktop.resolve1.set-default-route")) {
+        return polkit.Result.YES;
+    }
+});
