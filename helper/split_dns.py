@@ -11,9 +11,10 @@ import fcntl
 import tempfile
 
 
-def state_path():
+def state_path(backend="resolved"):
     runtime = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
-    return Path(runtime) / "dms-openvpn3-dns/state.json"
+    filename = "state.json" if backend == "resolved" else "dnsdist-state.json"
+    return Path(runtime) / "dms-openvpn3-dns" / filename
 
 SESSIONS = "net.openvpn.v3.sessions"
 RESOLVED = "org.freedesktop.resolve1"
@@ -22,6 +23,14 @@ PROPERTIES = "org.freedesktop.DBus.Properties"
 
 def config_path():
     return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "dms-openvpn3/dns.json"
+
+
+def read_backend(path):
+    config = json.loads(path.read_text()) if path.exists() else {}
+    backend = config.get("backend", "resolved")
+    if backend not in ("resolved", "dnsdist"):
+        raise ValueError("DNS backend must be resolved or dnsdist")
+    return backend
 
 
 def read_config(path):
@@ -120,6 +129,53 @@ class Resolved:
                 raise RuntimeError(error.stderr.strip()[:300] or "Could not update DNS routing") from error
 
 
+class Dnsdist:
+    """Publish routing intent for an administrator-installed dnsdist bridge.
+
+    No Lua or privileged commands are supplied by the plugin. The bridge must
+    validate interface identity and obtain DNS addresses from OpenVPN itself.
+    """
+    def __init__(self, path=None):
+        self.path = path or state_path().with_name("dnsdist-routes.json")
+
+    def records(self):
+        return json.loads(self.path.read_text()) if self.path.exists() else {}
+
+    def read(self, device):
+        index = socket.if_nametoindex(device)
+        record = self.records().get(device, {})
+        domains = record.get("domains", []) if record.get("index") == index else []
+        return {"index": index, "domains": domains, "default": False, "has_dns": True}
+
+    def write(self, device, domains, default):
+        if default:
+            raise ValueError("dnsdist backend only supports split DNS")
+        values = parse_domains("\n".join(domain for domain, route in domains if route)) if domains else []
+        if len(values) != len(domains):
+            raise ValueError("dnsdist backend requires unique route-only domains")
+        index = socket.if_nametoindex(device)
+        records = self.records()
+        if values:
+            records[device] = {"index": index, "domains": [[domain, True] for domain in values]}
+        else:
+            records.pop(device, None)
+        save_state(self.path, records)
+        self.path.chmod(0o600)
+
+    def remove_stale(self):
+        records = self.records()
+        valid = {}
+        for device, record in records.items():
+            try:
+                if socket.if_nametoindex(device) == record["index"]:
+                    valid[device] = record
+            except OSError:
+                pass
+        if valid != records:
+            save_state(self.path, valid)
+            self.path.chmod(0o600)
+
+
 def restore(resolver, record):
     try:
         current = resolver.read(record["device"])
@@ -183,4 +239,6 @@ def sync(profiles, sessions, resolver, path=None):
             except Exception as error:
                 statuses[name] = {"state": "error", "error": str(error)}
         save_state(path, state)
+        if hasattr(resolver, "remove_stale"):
+            resolver.remove_stale()
         return statuses

@@ -78,10 +78,40 @@ refresh does not read providers or change DNS. There is no separate watcher or
 system service. DNS state is shown on
 the profile card, including provider and authorization failures.
 
-This optional feature requires `systemd-resolved` and `resolvectl`. Your desktop
+The default `resolved` backend requires `systemd-resolved` and `resolvectl`. Your desktop
 may ask for authorization to change DNS domains and the default DNS route,
 according to its existing polkit policy. A DNS error does not disconnect the
 VPN. The plugin does not install additional privilege rules.
+
+### dnsdist backend
+
+Set `"backend": "dnsdist"` alongside `"profiles"` to publish split-DNS routes
+without using resolved. The default remains `"backend": "resolved"`.
+The dnsdist backend atomically writes
+`$XDG_RUNTIME_DIR/dms-openvpn3-dns/dnsdist-routes.json`, readable only by the
+user and root. It maps interface names to their current interface index and
+validated route-only domains. Disconnects remove routes; interface reuse does
+not inherit an old binding. The plugin runs no privileged commands and emits
+no executable Lua. Its applied status means routing intent was published.
+
+An administrator-installed host bridge must consume this file, verify that
+each interface/index is still active, and obtain `dns_name_servers` from the
+documented OpenVPN `net.openvpn.v3.netcfg` device properties. Bind DNS backends
+to the VPN interface, withdraw them on disconnect, and retain private-domain
+exclusions so those names never reach a public fallback. The plugin itself
+does not install dnsdist, change `/etc/resolv.conf`, or disable resolved.
+
+For a host without resolved, OpenVPN still needs a DNS metadata backend. Its
+`--resolv-conf` backend can target a dedicated private file instead of
+`/etc/resolv.conf`; this preserves pushed DNS metadata for the bridge. Configure
+this through `openvpn3-admin netcfg-service`, then restart the network-config
+service while VPN sessions are disconnected. Merely removing every OpenVPN
+DNS backend also removes the DNS-server metadata needed by the bridge.
+
+Backend migration is an administrator operation: disconnect the VPN, change
+the backend setting and host resolver integration together, then reconnect.
+Keep the previous host DNS configuration for rollback. Each backend stores
+its own cleanup state.
 
 To remove recurring authorization prompts, an administrator can install the
 optional [polkit rule](docs/10-dms-openvpn3-dns.rules) once. Neither the plugin

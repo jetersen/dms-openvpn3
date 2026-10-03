@@ -392,9 +392,12 @@ def run(argv: list[str] | None = None, bus: Any = None) -> dict[str, Any]:
     if args.operation == "dns-sync":
         import split_dns
         profiles = split_dns.read_config(split_dns.config_path())
-        if not profiles and not split_dns.state_path().exists():
+        backend = split_dns.read_backend(split_dns.config_path())
+        state_path = split_dns.state_path(backend)
+        if not profiles and not state_path.exists():
             return {"profiles": {}}
-        statuses = split_dns.sync(profiles, visible_session_records(api), split_dns.Resolved(bus))
+        resolver = split_dns.Resolved(bus) if backend == "resolved" else split_dns.Dnsdist()
+        statuses = split_dns.sync(profiles, visible_session_records(api), resolver, state_path)
         return {"profiles": statuses}
     if args.operation == "connect":
         return connect(api, args.config_path)

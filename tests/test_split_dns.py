@@ -27,6 +27,15 @@ class FakeResolver:
 
 
 class ProviderTests(unittest.TestCase):
+    def test_backend_defaults_and_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'dns.json'
+            self.assertEqual(dns.read_backend(path), 'resolved')
+            path.write_text('{"backend":"dnsdist"}')
+            self.assertEqual(dns.read_backend(path), 'dnsdist')
+            path.write_text('{"backend":"shell"}')
+            with self.assertRaises(ValueError):
+                dns.read_backend(path)
     def test_reads_generated_json_without_running_a_command(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "domains.json"
@@ -77,6 +86,43 @@ class PermissionTests(unittest.TestCase):
                 patch.object(dns.subprocess, "run") as run:
             resolver.write("tun0", [["example.com", True]], False)
         run.assert_not_called()
+
+
+class DnsdistTests(unittest.TestCase):
+    def test_export_reconnect_and_disconnect(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(dns.socket, 'if_nametoindex', return_value=8) as index:
+            root = Path(directory)
+            provider = root / 'domains'
+            provider.write_text('corp.example\n')
+            resolver = dns.Dnsdist(root / 'routes.json')
+            session = {'path': '/session/one', 'config_name': 'work', 'device_name': 'tun1', 'active': True}
+            profiles = {'work': {'enabled': True, 'file': str(provider)}}
+            state = root / 'state.json'
+            self.assertEqual(dns.sync(profiles, [session], resolver, state)['work']['state'], 'applied')
+            self.assertEqual(resolver.records(), {'tun1': {'index': 8, 'domains': [['corp.example', True]]}})
+            self.assertEqual(resolver.path.stat().st_mode & 0o777, 0o600)
+            # A reused interface must not inherit the old binding.
+            index.return_value = 9
+            self.assertEqual(resolver.read('tun1')['domains'], [])
+            dns.sync(profiles, [session], resolver, state)
+            self.assertEqual(resolver.records()['tun1']['index'], 9)
+            dns.sync(profiles, [], resolver, state)
+            self.assertEqual(resolver.records(), {})
+
+    def test_removed_interface_drops_export_without_resolved(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(dns.socket, 'if_nametoindex', return_value=3) as index:
+            resolver = dns.Dnsdist(Path(directory) / 'routes.json')
+            resolver.write('tun0', [['corp.example', True]], False)
+            index.side_effect = OSError('gone')
+            resolver.remove_stale()
+            self.assertEqual(resolver.records(), {})
+
+    def test_catchall_and_search_domains_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(dns.socket, 'if_nametoindex', return_value=3):
+            resolver = dns.Dnsdist(Path(directory) / 'routes.json')
+            for domains in [[['.', True]], [['corp.example', False]]]:
+                with self.assertRaises(ValueError):
+                    resolver.write('tun0', domains, False)
 
 
 class LifecycleTests(unittest.TestCase):
