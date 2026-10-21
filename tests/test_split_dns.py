@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -61,14 +62,14 @@ class ProviderTests(unittest.TestCase):
                 dns.parse_domains(text)
 
     def test_command_runs_without_shell(self):
-        self.assertEqual(dns.provider_domains({"command": ["/usr/bin/printf", "example.com\\n"]}), ["example.com"])
+        self.assertEqual(dns.provider_domains({"command": [shutil.which("printf"), "example.com\\n"]}), ["example.com"])
 
     def test_provider_failures_are_reported(self):
         for source in ({}, {"file": "x", "command": ["x"]}, {"command": "echo example.com"}):
             with self.assertRaises(ValueError):
                 dns.provider_domains(source)
         with self.assertRaises(dns.subprocess.CalledProcessError):
-            dns.provider_domains({"command": ["/usr/bin/false"]})
+            dns.provider_domains({"command": [shutil.which("false")]})
 
 
 class PermissionTests(unittest.TestCase):

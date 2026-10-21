@@ -1,12 +1,12 @@
-# DankMaterialShell Integration for OpenVPN® 3
+# Dux Shell Integration for OpenVPN® 3
 
-An independent DankMaterialShell 1.5 widget for importing and removing OpenVPN® 3 Linux profiles, seeing which sessions are actually connected, and connecting or disconnecting them.
+An independent Dux Shell 2.0 widget for importing and removing OpenVPN® 3 Linux profiles, seeing which sessions are actually connected, and connecting or disconnecting them.
 
 ![Profile manager popout](docs/screenshot.png)
 
 ## Requirements
 
-- DankMaterialShell 1.5 or newer
+- Dux Shell 2.0 or newer
 - OpenVPN® 3 Linux
 - Python 3 with `dbus-python`
 
@@ -19,7 +19,7 @@ ln -s "$PWD" ~/.config/DankMaterialShell/plugins/openvpn3
 dms ipc call plugin-scan scan
 ```
 
-Enable **DMS Integration for OpenVPN® 3** under DMS Settings → Plugins, then add it to DankBar.
+Enable **Dux Shell Integration for OpenVPN® 3** under DMS Settings → Plugins, then add it to DankBar.
 
 ## Version 0.1 scope
 
@@ -203,6 +203,6 @@ This is an independent community plugin and is not affiliated with, endorsed by,
 
 ## Design references
 
-- [DMS plugin development](https://danklinux.com/docs/dankmaterialshell/plugin-development)
+- [DMS plugin development](https://duxlabs.dev/docs/dankmaterialshell/plugin-development)
 - [OpenVPN® 3 D-Bus overview](https://github.com/OpenVPN/openvpn3-linux/blob/master/docs/dbus/dbus-overview.md)
 - [OpenVPN® 3 session service](https://github.com/OpenVPN/openvpn3-linux/blob/master/docs/dbus/dbus-service-net.openvpn.v3.sessions.md)

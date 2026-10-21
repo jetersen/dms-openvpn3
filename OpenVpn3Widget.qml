@@ -5,7 +5,7 @@ import QtQuick.Layouts
 import qs.Common
 import qs.Modules.Plugins
 import qs.Modals.FileBrowser
-import qs.Widgets
+import qs.DCommon.Widgets
 import "."
 
 PluginComponent {
@@ -71,7 +71,7 @@ PluginComponent {
                 height: root.iconSize
                 anchors.verticalCenter: parent.verticalCenter
 
-                DankIcon {
+                DIcon {
                     anchors.centerIn: parent
                     name: "vpn_lock"
                     size: root.iconSize
@@ -114,7 +114,7 @@ PluginComponent {
                 height: root.iconSize
                 anchors.horizontalCenter: parent.horizontalCenter
 
-                DankIcon {
+                DIcon {
                     anchors.centerIn: parent
                     name: "vpn_lock"
                     size: root.iconSize
@@ -173,7 +173,7 @@ PluginComponent {
                 Row {
                     spacing: Theme.spacingXS
 
-                    DankActionButton {
+                    DActionButton {
                         iconName: "add"
                         iconColor: Theme.primary
                         buttonSize: 28
@@ -183,7 +183,7 @@ PluginComponent {
                         onClicked: profileBrowser.open()
                     }
 
-                    DankActionButton {
+                    DActionButton {
                         iconName: "refresh"
                         iconColor: Theme.surfaceVariantText
                         buttonSize: 28
@@ -195,7 +195,7 @@ PluginComponent {
                 }
             }
 
-            DankFlickable {
+            DFlickable {
                 width: parent.width
                 height: Math.min(contentColumn.implicitHeight, 460)
                 contentHeight: contentColumn.implicitHeight
@@ -235,7 +235,7 @@ PluginComponent {
                         spacing: Theme.spacingXS
                         anchors.centerIn: parent
 
-                        DankIcon {
+                        DIcon {
                             name: "vpn_key"
                             size: 28
                             color: Theme.surfaceVariantText
@@ -352,7 +352,7 @@ PluginComponent {
                                     }
                                 }
 
-                                DankActionButton {
+                                DActionButton {
                                     iconName: "delete"
                                     buttonSize: 30
                                     iconSize: 18
@@ -388,12 +388,12 @@ PluginComponent {
                                         elide: Text.ElideRight
                                     }
 
-                                    DankButton {
+                                    DButton {
                                         text: "Cancel"
                                         onClicked: popout.pendingRemovePath = ""
                                     }
 
-                                    DankButton {
+                                    DButton {
                                         text: "Remove"
                                         enabled: !OpenVpn3Service.actionInFlight
                                         onClicked: {
@@ -413,7 +413,7 @@ PluginComponent {
                                     width: profileColumn.width
                                     spacing: Theme.spacingS
 
-                                    DankIcon {
+                                    DIcon {
                                         name: root.stateIcon(modelData.state)
                                         size: 18
                                         color: root.stateColor(modelData.state)
@@ -498,7 +498,7 @@ PluginComponent {
                                 font.pixelSize: Theme.fontSizeSmall
                             }
 
-                            DankActionButton {
+                            DActionButton {
                                 iconName: "link_off"
                                 buttonSize: 28
                                 iconColor: Theme.error
