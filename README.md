@@ -32,7 +32,7 @@ Enable **Dux Shell Integration for OpenVPN® 3** under DMS Settings → Plugins,
 - React to OpenVPN® session-manager and per-session D-Bus events.
 - Reconcile state with a slow 60-second fallback poll and refresh after actions.
 
-When a session needs authentication, click **Sign in** on its card. New connections open the sign-in panel automatically. Enter the requested username, password, passphrase, or OTP and click **Continue**. Browser authentication provides an **Open browser** button; the session connects after sign-in completes. **Cancel** disconnects the pending session. Credentials are sent to the helper over standard input, never command-line arguments, and are not saved by the plugin. Hardware-token interactions are not supported by this panel.
+When a session needs authentication, click **Sign in** on its card. New connections open the sign-in panel automatically. Enter the requested username, password, passphrase, or OTP and click **Continue**. For browser authentication, clicking **Connect** or **Sign in** opens the browser automatically, including when the request arrives after connection starts. The panel shows **Waiting for browser sign-in**, with a **Reopen browser** button if needed. Each browser request opens once; background sessions do not open browser tabs. The session connects after sign-in completes. **Cancel** disconnects the pending session. Credentials are sent to the helper over standard input, never command-line arguments, and are not saved by the plugin. Hardware-token interactions are not supported by this panel.
 
 OpenVPN® 3 Linux is a separate project and dependency.
 

@@ -31,6 +31,10 @@ Singleton {
     property string authenticationPath: ""
     property var authentication: ({"fields": [], "url": ""})
     property string pendingAuthenticationPath: ""
+    property string connectionPath: ""
+    property int connectionMissingCount: 0
+    property string lastBrowserAuthKey: ""
+    property bool authenticationBrowserOpened: false
     // Kept only until the helper starts; never included in argv or logs.
     property string authenticationInput: ""
     property bool dnsPending: false
@@ -169,6 +173,7 @@ Singleton {
     }
 
     function reconcileSessionSubscriptions() {
+        followConnection();
         if (!DMSService.isConnected)
             return;
         const currentPaths = new Set(sessions.map(session => session.path));
@@ -216,6 +221,9 @@ Singleton {
     function connectProfile(configPath) {
         if (actionInFlight)
             return;
+        clearAuthentication();
+        connectionPath = "";
+        connectionMissingCount = 0;
         actionInFlight = true;
         actionPath = configPath;
         actionKind = "connect";
@@ -228,6 +236,10 @@ Singleton {
     function disconnectSession(sessionPath) {
         if (actionInFlight)
             return;
+        if (connectionPath === sessionPath)
+            connectionPath = "";
+        if (authenticationPath === sessionPath)
+            clearAuthentication();
         actionInFlight = true;
         actionPath = sessionPath;
         actionKind = "disconnect";
@@ -240,6 +252,12 @@ Singleton {
     function requestAuthentication(sessionPath) {
         if (actionInFlight)
             return;
+        if (authenticationPath !== sessionPath) {
+            lastBrowserAuthKey = "";
+            authenticationBrowserOpened = false;
+        }
+        connectionPath = sessionPath;
+        connectionMissingCount = 0;
         authenticationPath = sessionPath;
         authentication = ({"fields": [], "url": ""});
         actionInFlight = true;
@@ -249,6 +267,53 @@ Singleton {
         actionProcess.command = ["python3", helperPath, "auth-request", "--session-path", sessionPath];
         actionTimeout.restart();
         actionProcess.running = true;
+    }
+
+    function followConnection() {
+        // Follow only a connection/sign-in explicitly started in this widget.
+        if (actionInFlight || !connectionPath)
+            return;
+        const session = sessions.find(session => session.path === connectionPath);
+        if (!session) {
+            // A snapshot already in flight can predate the new session.
+            if (++connectionMissingCount >= 2) {
+                connectionPath = "";
+                clearAuthentication();
+            }
+            return;
+        }
+        connectionMissingCount = 0;
+        if (["connected", "failed", "disconnected"].includes(session.state)) {
+            connectionPath = "";
+            clearAuthentication();
+            if (session.active)
+                ToastService.showInfo("Profiles", `Connected to ${session.config_name || "VPN"}`);
+            return;
+        }
+        if (session.state === "auth_required" && (authenticationPath !== session.path || (!authentication.url && !authentication.fields.length)))
+            requestAuthentication(session.path);
+    }
+
+    function openAuthenticationBrowser() {
+        if (!authentication.url)
+            return;
+        authenticationBrowserOpened = Qt.openUrlExternally(authentication.url);
+        if (!authenticationBrowserOpened) {
+            lastError = "Could not open your browser. Try Open browser again.";
+            ToastService.showError("Profiles", lastError);
+        }
+    }
+
+    function applyAuthentication(request) {
+        authentication = request || {"fields": [], "url": ""};
+        if (!authentication.url)
+            return;
+        const key = authenticationPath + "\n" + authentication.url;
+        if (lastBrowserAuthKey === key)
+            return;
+        // Record the attempt even on failure; retries must be explicit.
+        lastBrowserAuthKey = key;
+        openAuthenticationBrowser();
     }
 
     function submitAuthentication(answers) {
@@ -268,6 +333,8 @@ Singleton {
         authenticationPath = "";
         authentication = ({"fields": [], "url": ""});
         authenticationInput = "";
+        lastBrowserAuthKey = "";
+        authenticationBrowserOpened = false;
     }
 
     function importProfile(filePath) {
@@ -359,6 +426,16 @@ Singleton {
     }
 
     Timer {
+        interval: 2000
+        repeat: true
+        running: root.connectionPath.length > 0
+        onTriggered: {
+            if (!root.actionInFlight)
+                root.refresh();
+        }
+    }
+
+    Timer {
         id: snapshotTimeout
         interval: 10000
         repeat: false
@@ -376,6 +453,8 @@ Singleton {
         repeat: false
         onTriggered: {
             actionProcess.running = false;
+            if (root.actionKind === "auth-request")
+                root.connectionPath = "";
             root.actionInFlight = false;
             root.actionPath = "";
             root.actionKind = "";
@@ -397,11 +476,13 @@ Singleton {
                 if (response.ok) {
                     root.profiles = response.data.profiles || [];
                     root.sessions = response.data.sessions || [];
-                    if (root.authenticationPath && !root.sessions.some(session => session.path === root.authenticationPath && !["connected", "disconnected", "failed"].includes(session.state)))
+                    const authSession = root.sessions.find(session => session.path === root.authenticationPath);
+                    if (root.authenticationPath && ((authSession && ["connected", "disconnected", "failed"].includes(authSession.state)) || (!authSession && root.connectionMissingCount > 0)))
                         root.clearAuthentication();
                     root.warnings = response.data.warnings || [];
+                    if (!root.available)
+                        root.lastError = "";
                     root.available = true;
-                    root.lastError = "";
                     Qt.callLater(root.reconcileSessionSubscriptions);
                     if (root.dnsRefreshPending) {
                         root.dnsRefreshPending = false;
@@ -466,15 +547,21 @@ Singleton {
             onStreamFinished: {
                 const response = root.parseResponse(text);
                 if (!response.ok) {
+                    if (root.actionKind === "auth-request")
+                        root.connectionPath = "";
                     root.lastError = root.responseError(response);
                     ToastService.showError("Profiles", root.lastError);
                     return;
                 }
                 const session = response.data?.session;
+                if (root.actionKind === "connect" && session) {
+                    root.connectionPath = session.path;
+                    root.connectionMissingCount = 0;
+                }
                 if (response.data?.authenticationRequired || session?.state === "auth_required") {
                     root.pendingAuthenticationPath = session.path;
                 } else if (root.actionKind === "auth-request" || root.actionKind === "auth-submit") {
-                    root.authentication = response.data.authentication || {"fields": [], "url": ""};
+                    root.applyAuthentication(response.data.authentication);
                     if (response.data.submitted)
                         root.clearAuthentication();
                 } else if (root.actionKind === "import") {

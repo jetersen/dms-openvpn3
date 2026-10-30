@@ -261,7 +261,7 @@ PluginComponent {
                         StyledText {
                             visible: authFields.count === 0
                             width: parent.width
-                            text: OpenVpn3Service.authentication.url ? "Continue in your browser. This session will connect when sign-in completes." : "Waiting for an authentication request…"
+                            text: OpenVpn3Service.authentication.url ? (OpenVpn3Service.authenticationBrowserOpened ? "Waiting for browser sign-in. The VPN will connect automatically when you finish." : "Open your browser to complete sign-in.") : "Waiting for an authentication request…"
                             color: Theme.surfaceVariantText
                             font.pixelSize: Theme.fontSizeSmall
                             wrapMode: Text.WordWrap
@@ -292,12 +292,9 @@ PluginComponent {
 
                             DButton {
                                 visible: OpenVpn3Service.authentication.url.length > 0
-                                text: "Open browser"
+                                text: OpenVpn3Service.authenticationBrowserOpened ? "Reopen browser" : "Open browser"
                                 enabled: !OpenVpn3Service.actionInFlight
-                                onClicked: {
-                                    if (!Qt.openUrlExternally(OpenVpn3Service.authentication.url))
-                                        OpenVpn3Service.lastError = "Could not open your browser";
-                                }
+                                onClicked: OpenVpn3Service.openAuthenticationBrowser()
                             }
 
                             DButton {
