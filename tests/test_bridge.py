@@ -357,5 +357,81 @@ class BridgeTests(unittest.TestCase):
         self.assertFalse(api.interface.remove_called)
 
 
+class AuthenticationTests(unittest.TestCase):
+    path = MutationApi.new_session_path
+
+    def setUp(self):
+        self.api = MutationApi(status=(3, 20, "Credentials"))
+        self.api.interface = mock.Mock()
+        self.api.interface.UserInputQueueGetTypeGroup.return_value = [(1, 1)]
+        self.api.interface.UserInputQueueCheck.return_value = [0, 1]
+        self.slots = [(1, 1, 0, "username", "Username", False),
+                      (1, 1, 1, "password", "Password", True)]
+        self.api.interface.UserInputQueueFetch.side_effect = lambda t, g, i: self.slots[i]
+        self.answers = [{"type": 1, "group": 1, "id": i, "value": value}
+                        for i, value in enumerate(("user", "secret-marker"))]
+
+    def test_fields_follow_server_labels_and_masking(self):
+        request = bridge.authentication(self.api, self.path)
+        self.assertEqual(["Username", "Password"], [f["label"] for f in request["fields"]])
+        self.assertEqual([False, True], [f["masked"] for f in request["fields"]])
+        self.assertNotIn("value", request["fields"][0])
+
+    def test_submit_provides_all_fields_then_resumes(self):
+        result = bridge.submit_authentication(self.api, self.path, self.answers)
+        self.assertTrue(result["submitted"])
+        self.assertNotIn("secret-marker", str(result))
+        self.assertEqual([mock.call(1, 1, 0, "user"), mock.call(1, 1, 1, "secret-marker")],
+                         self.api.interface.UserInputProvide.call_args_list)
+        self.api.interface.Ready.assert_called_once()
+        self.api.interface.Connect.assert_called_once()
+
+    def test_missing_duplicate_empty_and_stale_answers_are_rejected_before_submission(self):
+        for answers in (self.answers[:1], self.answers + self.answers[:1],
+                        [dict(a, value="") for a in self.answers],
+                        [dict(a, id=99) for a in self.answers], None):
+            with self.subTest(answers=answers), self.assertRaises(bridge.BridgeError):
+                bridge.submit_authentication(self.api, self.path, answers)
+        self.api.interface.UserInputProvide.assert_not_called()
+        self.api.interface.Connect.assert_not_called()
+
+    def test_submit_errors_never_echo_secrets(self):
+        self.api.interface.UserInputProvide.side_effect = RuntimeError("bad secret-marker")
+        with self.assertRaises(bridge.BridgeError) as raised:
+            bridge.submit_authentication(self.api, self.path, self.answers)
+        self.assertNotIn("secret-marker", str(raised.exception))
+
+    def test_next_challenge_does_not_connect_early(self):
+        self.api.interface.Ready.side_effect = RuntimeError("More input needed")
+        result = bridge.submit_authentication(self.api, self.path, self.answers)
+        self.assertEqual(2, len(result["authentication"]["fields"]))
+        self.api.interface.Connect.assert_not_called()
+
+    def test_browser_auth_is_read_separately_from_snapshot(self):
+        url = "https://login.example.test/secret-token"
+        self.api.props.values["status"] = (3, 22, url)
+        self.assertEqual(url, bridge.authentication(self.api, self.path)["url"])
+        self.assertNotIn("secret-token", str(bridge.session_record(self.api, self.path)))
+        self.api.interface.UserInputQueueGetTypeGroup.assert_not_called()
+
+    def test_browser_auth_rejects_non_web_urls(self):
+        for url in ("file:///etc/passwd", "javascript:alert(1)", "https:///no-host", "https://host/ bad"):
+            self.api.props.values["status"] = (3, 22, url)
+            with self.subTest(url=url), self.assertRaises(bridge.BridgeError):
+                bridge.authentication(self.api, self.path)
+
+    def test_unsupported_queue_and_invalid_paths_are_rejected(self):
+        self.api.interface.UserInputQueueGetTypeGroup.return_value = [(2, 7)]
+        with self.assertRaises(bridge.BridgeError):
+            bridge.authentication(self.api, self.path)
+        with self.assertRaises(bridge.BridgeError):
+            bridge.authentication(self.api, "/invalid")
+
+    def test_slot_identity_must_match(self):
+        self.slots[0] = (1, 1, 99, "username", "Username", False)
+        with self.assertRaises(bridge.BridgeError):
+            bridge.authentication(self.api, self.path)
+
+
 if __name__ == "__main__":
     unittest.main()

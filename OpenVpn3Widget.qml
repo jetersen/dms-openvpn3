@@ -13,7 +13,7 @@ PluginComponent {
 
     layerNamespacePlugin: "openvpn3"
     popoutWidth: 420
-    popoutHeight: Math.min(560, 150 + OpenVpn3Service.profiles.length * 88 + OpenVpn3Service.sessions.length * 52)
+    popoutHeight: Math.min(560, 150 + (OpenVpn3Service.authenticationPath ? 260 : 0) + OpenVpn3Service.profiles.length * 88 + OpenVpn3Service.sessions.length * 52)
 
     readonly property bool hasFailedSession: OpenVpn3Service.sessions.some(session => session.state === "failed")
     readonly property color barStatusColor: {
@@ -60,6 +60,30 @@ PluginComponent {
         if (["auth_required", "connecting", "disconnecting", "paused", "preparing"].includes(state))
             return Theme.warning;
         return Theme.surfaceVariantText;
+    }
+
+    component AuthenticationField: Column {
+        id: authField
+        required property var modelData
+        readonly property string value: authInput.text
+        function clear() { authInput.text = ""; }
+        width: parent ? parent.width : 0
+        spacing: Theme.spacingXS
+
+        StyledText {
+            width: parent.width
+            text: authField.modelData.label
+            color: Theme.surfaceText
+            font.pixelSize: Theme.fontSizeSmall
+            wrapMode: Text.WordWrap
+        }
+
+        DTextField {
+            id: authInput
+            width: parent.width
+            enabled: !OpenVpn3Service.actionInFlight
+            echoMode: authField.modelData.masked ? TextInput.Password : TextInput.Normal
+        }
     }
 
     horizontalBarPill: Component {
@@ -205,6 +229,95 @@ PluginComponent {
                     id: contentColumn
                     width: parent.width
                     spacing: Theme.spacingS
+
+                StyledRect {
+                    visible: OpenVpn3Service.authenticationPath.length > 0
+                    width: parent.width
+                    height: visible ? authColumn.implicitHeight + Theme.spacingM * 2 : 0
+                    radius: Theme.cornerRadius
+                    color: Theme.surfaceLight
+
+                    Column {
+                        id: authColumn
+                        width: parent.width - Theme.spacingM * 2
+                        anchors.centerIn: parent
+                        spacing: Theme.spacingS
+
+                        StyledText {
+                            width: parent.width
+                            text: "Sign in to " + (OpenVpn3Service.sessions.find(session => session.path === OpenVpn3Service.authenticationPath)?.config_name || "VPN")
+                            color: Theme.surfaceText
+                            font.pixelSize: Theme.fontSizeMedium
+                            wrapMode: Text.WordWrap
+                        }
+
+                        Repeater {
+                            id: authFields
+                            model: OpenVpn3Service.authentication.fields || []
+
+                            delegate: AuthenticationField {}
+                        }
+
+                        StyledText {
+                            visible: authFields.count === 0
+                            width: parent.width
+                            text: OpenVpn3Service.authentication.url ? "Continue in your browser. This session will connect when sign-in completes." : "Waiting for an authentication request…"
+                            color: Theme.surfaceVariantText
+                            font.pixelSize: Theme.fontSizeSmall
+                            wrapMode: Text.WordWrap
+                        }
+
+                        Row {
+                            spacing: Theme.spacingS
+
+                            DButton {
+                                visible: authFields.count > 0
+                                text: "Continue"
+                                enabled: !OpenVpn3Service.actionInFlight
+                                onClicked: {
+                                    const answers = [];
+                                    for (let i = 0; i < authFields.count; i++) {
+                                        const field = authFields.itemAt(i) as AuthenticationField;
+                                        if (!field.value.length) {
+                                            OpenVpn3Service.lastError = "Complete all authentication fields";
+                                            return;
+                                        }
+                                        answers.push(Object.assign({}, field.modelData, {"value": field.value}));
+                                    }
+                                    OpenVpn3Service.submitAuthentication(answers);
+                                    for (let i = 0; i < authFields.count; i++)
+                                        (authFields.itemAt(i) as AuthenticationField).clear();
+                                }
+                            }
+
+                            DButton {
+                                visible: OpenVpn3Service.authentication.url.length > 0
+                                text: "Open browser"
+                                enabled: !OpenVpn3Service.actionInFlight
+                                onClicked: {
+                                    if (!Qt.openUrlExternally(OpenVpn3Service.authentication.url))
+                                        OpenVpn3Service.lastError = "Could not open your browser";
+                                }
+                            }
+
+                            DButton {
+                                text: "Refresh"
+                                enabled: !OpenVpn3Service.actionInFlight
+                                onClicked: OpenVpn3Service.requestAuthentication(OpenVpn3Service.authenticationPath)
+                            }
+
+                            DButton {
+                                text: "Cancel"
+                                enabled: !OpenVpn3Service.actionInFlight
+                                onClicked: {
+                                    const path = OpenVpn3Service.authenticationPath;
+                                    OpenVpn3Service.clearAuthentication();
+                                    OpenVpn3Service.disconnectSession(path);
+                                }
+                            }
+                        }
+                    }
+                }
 
                 StyledRect {
                     visible: OpenVpn3Service.lastError.length > 0
@@ -434,11 +547,18 @@ PluginComponent {
                                         StyledText {
                                             visible: modelData.state === "auth_required" || modelData.device_name.length > 0 || modelData.message.length > 0
                                             width: parent.width
-                                            text: modelData.state === "auth_required" && modelData.backend_pid > 0 ? `Run openvpn3 session-auth --auth-req ${modelData.backend_pid}` : [modelData.device_name, modelData.message].filter(value => value.length > 0).join(" • ")
+                                            text: modelData.state === "auth_required" ? "Sign in to continue" : [modelData.device_name, modelData.message].filter(value => value.length > 0).join(" • ")
                                             color: Theme.surfaceVariantText
                                             font.pixelSize: Theme.fontSizeSmall
                                             elide: Text.ElideRight
                                         }
+                                    }
+
+                                    DButton {
+                                        visible: modelData.state === "auth_required"
+                                        text: "Sign in"
+                                        enabled: !OpenVpn3Service.actionInFlight
+                                        onClicked: OpenVpn3Service.requestAuthentication(modelData.path)
                                     }
 
                                     Rectangle {
@@ -496,6 +616,13 @@ PluginComponent {
                                 text: `${modelData.config_name || "Unknown profile"} • ${root.stateLabel(modelData.state)}`
                                 color: Theme.surfaceText
                                 font.pixelSize: Theme.fontSizeSmall
+                            }
+
+                            DButton {
+                                visible: modelData.state === "auth_required"
+                                text: "Sign in"
+                                enabled: !OpenVpn3Service.actionInFlight
+                                onClicked: OpenVpn3Service.requestAuthentication(modelData.path)
                             }
 
                             DActionButton {

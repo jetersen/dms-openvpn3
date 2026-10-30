@@ -28,6 +28,11 @@ Singleton {
     property string managerSubscriptionId: ""
     property var sessionSubscriptions: ({})
     property var dnsStatus: ({})
+    property string authenticationPath: ""
+    property var authentication: ({"fields": [], "url": ""})
+    property string pendingAuthenticationPath: ""
+    // Kept only until the helper starts; never included in argv or logs.
+    property string authenticationInput: ""
     property bool dnsPending: false
     property bool dnsRefreshPending: false
 
@@ -232,6 +237,39 @@ Singleton {
         actionProcess.running = true;
     }
 
+    function requestAuthentication(sessionPath) {
+        if (actionInFlight)
+            return;
+        authenticationPath = sessionPath;
+        authentication = ({"fields": [], "url": ""});
+        actionInFlight = true;
+        actionPath = sessionPath;
+        actionKind = "auth-request";
+        lastError = "";
+        actionProcess.command = ["python3", helperPath, "auth-request", "--session-path", sessionPath];
+        actionTimeout.restart();
+        actionProcess.running = true;
+    }
+
+    function submitAuthentication(answers) {
+        if (actionInFlight || !authenticationPath)
+            return;
+        actionInFlight = true;
+        actionPath = authenticationPath;
+        actionKind = "auth-submit";
+        lastError = "";
+        authenticationInput = JSON.stringify(answers);
+        actionProcess.command = ["python3", helperPath, "auth-submit", "--session-path", authenticationPath];
+        actionTimeout.restart();
+        actionProcess.running = true;
+    }
+
+    function clearAuthentication() {
+        authenticationPath = "";
+        authentication = ({"fields": [], "url": ""});
+        authenticationInput = "";
+    }
+
     function importProfile(filePath) {
         if (actionInFlight || !filePath)
             return;
@@ -341,6 +379,7 @@ Singleton {
             root.actionInFlight = false;
             root.actionPath = "";
             root.actionKind = "";
+            root.authenticationInput = "";
             root.lastError = "The operation timed out";
             ToastService.showError("Profiles", root.lastError);
             root.refresh();
@@ -358,6 +397,8 @@ Singleton {
                 if (response.ok) {
                     root.profiles = response.data.profiles || [];
                     root.sessions = response.data.sessions || [];
+                    if (root.authenticationPath && !root.sessions.some(session => session.path === root.authenticationPath && !["connected", "disconnected", "failed"].includes(session.state)))
+                        root.clearAuthentication();
                     root.warnings = response.data.warnings || [];
                     root.available = true;
                     root.lastError = "";
@@ -408,6 +449,18 @@ Singleton {
     Process {
         id: actionProcess
         running: false
+        stdinEnabled: true
+        onStarted: {
+            if (root.actionKind === "auth-submit") {
+                write(root.authenticationInput + "\n");
+                root.authenticationInput = "";
+            }
+            stdinEnabled = false;
+        }
+        onRunningChanged: {
+            if (!running)
+                stdinEnabled = true;
+        }
 
         stdout: StdioCollector {
             onStreamFinished: {
@@ -419,10 +472,11 @@ Singleton {
                 }
                 const session = response.data?.session;
                 if (response.data?.authenticationRequired || session?.state === "auth_required") {
-                    const pid = session?.backend_pid || 0;
-                    const hint = pid > 0 ? `Run: openvpn3 session-auth --auth-req ${pid}` : "Complete authentication with the openvpn3 CLI";
-                    root.lastError = `Authentication required. ${hint}`;
-                    ToastService.showInfo("Profiles", root.lastError);
+                    root.pendingAuthenticationPath = session.path;
+                } else if (root.actionKind === "auth-request" || root.actionKind === "auth-submit") {
+                    root.authentication = response.data.authentication || {"fields": [], "url": ""};
+                    if (response.data.submitted)
+                        root.clearAuthentication();
                 } else if (root.actionKind === "import") {
                     ToastService.showInfo("Profiles", `Imported ${response.data?.profile?.name || "profile"}`);
                 } else if (root.actionKind === "remove") {
@@ -434,7 +488,7 @@ Singleton {
         stderr: StdioCollector {
             onStreamFinished: {
                 const message = text.trim();
-                if (message)
+                if (message && !root.actionKind.startsWith("auth-"))
                     console.warn(`[ProfileManager] helper stderr kind=${root.actionKind}: ${message}`);
             }
         }
@@ -444,6 +498,12 @@ Singleton {
             root.actionInFlight = false;
             root.actionPath = "";
             root.actionKind = "";
+            root.authenticationInput = "";
+            if (root.pendingAuthenticationPath) {
+                const path = root.pendingAuthenticationPath;
+                root.pendingAuthenticationPath = "";
+                Qt.callLater(() => root.requestAuthentication(path));
+            }
             root.refresh();
         }
     }

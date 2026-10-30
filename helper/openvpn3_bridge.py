@@ -10,6 +10,7 @@ import re
 import sys
 import time
 from typing import Any
+from urllib.parse import urlsplit
 
 PROTOCOL_VERSION = 1
 CONFIG_SERVICE = "net.openvpn.v3.configuration"
@@ -293,6 +294,66 @@ def disconnect(api: OpenVpnBus, session_path: str) -> dict[str, Any]:
     return {"disconnected": True, "alreadyGone": False}
 
 
+def authentication(api: OpenVpnBus, session_path: str) -> dict[str, Any]:
+    """Read pending input metadata without returning supplied credentials."""
+    if not SESSION_PATH_RE.fullmatch(session_path):
+        raise BridgeError("INVALID_REQUEST", "Invalid session path")
+    props = api.properties(SESSION_SERVICE, session_path)
+    status = props.Get(SESSION_INTERFACE, "status")
+    if int(status[0]) == 3 and int(status[1]) == 22:
+        url = str(status[2])
+        parsed = urlsplit(url)
+        if parsed.scheme not in {"https", "http"} or not parsed.hostname or any(c.isspace() for c in url):
+            raise BridgeError("INVALID_AUTH_URL", "The server supplied an invalid sign-in URL")
+        return {"fields": [], "url": url}
+    interface = api.session_interface(session_path)
+    fields = []
+    for qtype, group in interface.UserInputQueueGetTypeGroup():
+        if int(qtype) != 1:
+            raise BridgeError("UNSUPPORTED_AUTH", "This authentication method is not supported by the widget")
+        for qid in interface.UserInputQueueCheck(qtype, group):
+            slot = interface.UserInputQueueFetch(qtype, group, qid)
+            if tuple(map(int, slot[:3])) != (int(qtype), int(group), int(qid)):
+                raise BridgeError("DBUS_ERROR", "The authentication request changed; try again")
+            fields.append({"type": int(qtype), "group": int(group), "id": int(qid),
+                           "label": str(slot[4]) or str(slot[3]), "masked": bool(slot[5])})
+    return {"fields": fields, "url": ""}
+
+
+def submit_authentication(api: OpenVpnBus, session_path: str, answers: Any) -> dict[str, Any]:
+    pending = authentication(api, session_path)
+    expected = {(f["type"], f["group"], f["id"]) for f in pending["fields"]}
+    if not isinstance(answers, list) or not expected:
+        raise BridgeError("INVALID_REQUEST", "No credential request is pending; refresh authentication")
+    supplied = {}
+    for answer in answers:
+        if not isinstance(answer, dict):
+            raise BridgeError("INVALID_REQUEST", "Invalid authentication response")
+        key = tuple(answer.get(k) for k in ("type", "group", "id"))
+        if any(type(v) is not int for v in key) or not isinstance(answer.get("value"), str) or not answer["value"] or key in supplied:
+            raise BridgeError("INVALID_REQUEST", "Complete all authentication fields")
+        supplied[key] = answer["value"]
+    if set(supplied) != expected:
+        raise BridgeError("AUTH_CHANGED", "The authentication request changed; refresh authentication")
+    interface = api.session_interface(session_path)
+    try:
+        for (qtype, group, qid), value in supplied.items():
+            interface.UserInputProvide(qtype, group, qid, value)
+        try:
+            interface.Ready()
+        except Exception:
+            # A second challenge may be queued after the first credentials.
+            next_request = authentication(api, session_path)
+            if next_request["fields"] or next_request["url"]:
+                return {"authentication": next_request}
+            raise
+        interface.Connect()
+    except Exception as exc:
+        # Service errors can contain credentials. Never forward them to UI/logs.
+        raise BridgeError("AUTH_FAILED", "Could not complete authentication; refresh and try again") from exc
+    return {"authentication": {"fields": [], "url": ""}, "submitted": True}
+
+
 def read_profile_file(file_path: str) -> tuple[Path, str]:
     try:
         path = Path(file_path).expanduser().resolve(strict=True)
@@ -368,6 +429,9 @@ def parser() -> argparse.ArgumentParser:
     connect_parser.add_argument("--config-path", required=True)
     disconnect_parser = subparsers.add_parser("disconnect")
     disconnect_parser.add_argument("--session-path", required=True)
+    for operation in ("auth-request", "auth-submit"):
+        auth_parser = subparsers.add_parser(operation)
+        auth_parser.add_argument("--session-path", required=True)
     import_parser = subparsers.add_parser("import-profile")
     import_parser.add_argument("--file-path", required=True)
     import_parser.add_argument("--name")
@@ -403,6 +467,14 @@ def run(argv: list[str] | None = None, bus: Any = None) -> dict[str, Any]:
         return connect(api, args.config_path)
     if args.operation == "disconnect":
         return disconnect(api, args.session_path)
+    if args.operation == "auth-request":
+        return {"authentication": authentication(api, args.session_path)}
+    if args.operation == "auth-submit":
+        try:
+            answers = json.loads(sys.stdin.read(65537))
+        except (ValueError, RecursionError) as exc:
+            raise BridgeError("INVALID_REQUEST", "Invalid authentication response") from exc
+        return submit_authentication(api, args.session_path, answers)
     if args.operation == "import-profile":
         return import_profile(api, args.file_path, args.name)
     if args.operation == "remove-profile":
